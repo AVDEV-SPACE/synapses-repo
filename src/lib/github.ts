@@ -30,13 +30,13 @@ interface Commit {
     commit: {
         message: string;
         author: {
-            name?: string; // Permite ca 'name' să fie string sau undefined
-            date?: string; // Permite ca 'date' să fie string sau undefined
-        } | null; // Permite ca author să fie null
+            name?: string; 
+            date?: string; 
+        } | null; 
     };
     sha: string;
     author?: {
-        avatar_url?: string; // Permite ca avatar_url să fie string sau undefined
+        avatar_url?: string; 
     };
 }
 
@@ -64,26 +64,11 @@ type CommitResponse = {
     sha: string;
     commit: CommitInfo;
     author?: {
-        login?: string; // Opțional, deoarece GitHub API poate include aceste câmpuri
+        login?: string;
         id?: number;
         avatar_url?: string;
-        [key: string]: any; // Permite câmpuri suplimentare
-    } | null; // Poate fi și null
-};
-
-const exampleCommit: CommitResponse = {
-    sha: "exampleSha",
-    commit: {
-        message: "Example commit message",
-        author: null, // Permis acum
-        committer: {
-            name: "Committer Name",
-            date: "2023-12-01",
-        },
-    },
-    author: {   
-        avatar_url: "https://example.com/avatar.png",
-    },
+        [key: string]: any; 
+    } | null; 
 };
 
 
@@ -148,21 +133,14 @@ console.log("Commits:", commits);
 
 // ! FUNCTION TO CREATE A SUMMARY FOR THE COMMITS 
 export const pollCommits = async (ctx: any, db: any, projectId: string) => {
-    // 1. Obține URL-ul GitHub al proiectului din baza de date
     const { githubUrl } = await fetchProjectGithubUrl(projectId);  
-    
-    // 2. Obține commit-urile recente de pe GitHub
     const commitHashes = await getCommitHashes(githubUrl);
-
-    // 3. Filtrarea commit-urilor neprocesate
     const unprocessedCommits = await filterUnprocessedCommits(projectId, commitHashes);
 
-    // 4. Crearea unui rezumat pentru commit-urile neprocesate
     const summaryResponse = await Promise.allSettled(unprocessedCommits.map(commit => {
         return summariseCommit(githubUrl, commit.commitHash);  
     }));
     
-    // 5. Construirea unui array de rezumate
     const summaries = summaryResponse.map((response, index) => {
         if (response.status === 'fulfilled') {
             const commit = unprocessedCommits[index];
@@ -174,9 +152,8 @@ export const pollCommits = async (ctx: any, db: any, projectId: string) => {
             }
         }
         return null;
-    }).filter((item): item is NonNullable<typeof item> => item !== null); // Elimină elementele null
+    }).filter((item): item is NonNullable<typeof item> => item !== null); 
     
-    // 6. Salvează commit-urile și rezumatele în baza de date
     const commits = await db.commit.createMany({
         data: summaries.map(({ summary, commitHash, commitMessage, commitAuthorName, commitAuthorAvatar, commitDate }) => ({
             projectId,
@@ -234,7 +211,7 @@ async function fetchProjectGithubUrl(projectId: string) {
 // ! FUNCTION TO SORT THE NEW COMMITS AND RETURN THEM 
 async function filterUnprocessedCommits(projectId: string, commitHashes: Response[]) {
     try {
-        // Obține commit-urile procesate din baza de date
+        //* obtaining the commits from the database 
         const processedCommits: Response[] = await db.commit.findMany({
             where: { projectId }
         });
@@ -247,7 +224,6 @@ async function filterUnprocessedCommits(projectId: string, commitHashes: Respons
             return [];
         }
 
-        // Filtrează commit-urile care nu sunt încă procesate
         const unprocessedCommits = commitHashes.filter((commit) =>
             !processedCommits.some((processed) => processed.commitHash === commit.commitHash)
         );
@@ -265,7 +241,7 @@ async function getCommitsByProjectId(projectId: string) {
   try {
     const commits = await db.commit.findMany({
       where: { projectId: projectId },
-      orderBy: { commitDate: 'desc' }, // Poți sorta după data commit-ului
+      orderBy: { commitDate: 'desc' }, 
     });
 
     console.log('Fetched commits:', commits);
@@ -276,6 +252,5 @@ async function getCommitsByProjectId(projectId: string) {
   }
 }
 
-// Exemplu de apel pentru a obține commit-urile unui proiect specific
-const projectId = 'cm56ug903000g6dsp6dbrtmtg'; // ID-ul proiectului tău
+const projectId = 'cm56ug903000g6dsp6dbrtmtg';
 getCommitsByProjectId(projectId);
