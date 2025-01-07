@@ -9,11 +9,9 @@ const model = genAI.getGenerativeModel({
 
 export const aiSummariseCommit = async (diff: string) => {
     const response = await model.generateContent([
-        {
-            content: diff,
-            mimeType: 'text/plain'
-        }
+        { text: diff }, // Fără `mimeType`, deoarece nu este acceptat
     ]);
 
-    return response.response.text(); 
-}
+    return response.response.text();
+};
+

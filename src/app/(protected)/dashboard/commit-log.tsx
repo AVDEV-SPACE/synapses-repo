@@ -36,7 +36,7 @@
 
 
     return (
-      <ul className="space-y-6 border rounded-md h-40 w-full flex">
+      <ul className="space-y-6 border rounded-md h-40 w-full flex flex-col justify-start items-start">
         {commits?.map((commit, commitIdx) => (
           <li key={commitIdx} className="relative flex gap-x-4">
             <div

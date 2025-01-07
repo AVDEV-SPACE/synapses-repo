@@ -15,4 +15,3 @@ export const loadGitHubRepo = async (githubUrl: string, githubToken?: string) =>
     return docs
 }
 
-console.log(await loadGitHubRepo('https://github.com/AVDEV-SPACE/scale-up-planner'));
