@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 import { aiSummariseCommit } from "@/lib/gemini";
-import { syncCommitsForProject } from "@/lib/github";
+import { backfillCommitSummaries, syncCommitsForProject } from "@/lib/github";
 
 async function pollCommits(ctx: any, id: string) {
   console.log("Polling commits for project:", id);
@@ -75,11 +75,60 @@ export const projectRouter = createTRPCRouter({
     console.log("Fetching commits for project ID:", input.projectId);
     
     const commits = await ctx.db.commit.findMany({ 
-      where: { projectId: input.projectId } 
+      where: { projectId: input.projectId } ,
+      orderBy: { commitDate: 'desc' },
+      take: 15,
     });
     console.log("Commits fetched from DB:", commits);
     
     return commits;
+  }),
+
+  backfillMissingSummaries: protectedProcedure
+  .input(z.object({
+    projectId: z.string(),
+    githubUrl: z.string()
+  }))
+  .mutation(async ({ input }) => {
+    await backfillCommitSummaries(input.projectId, input.githubUrl);
+    return { success: true, message: 'Summaries generated for missing commits' };
+  }),
+
+
+  syncProjectCommits: protectedProcedure
+  .input(z.object({
+    projectId: z.string(),
+    githubUrl: z.string()
+  }))
+  .mutation(async ({ ctx, input }) => {
+    const project = await ctx.db.project.findUnique({
+      where: { id: input.projectId }
+    });
+
+    if (!project) {
+      throw new Error('Proiect negăsit');
+    }
+
+    //* Dacă proiectul este șters logic, îl reactualizăm
+    if (project.deletedAt) {
+      await ctx.db.project.update({
+        where: { id: input.projectId },
+        data: { deletedAt: null },
+      });
+    }
+
+    try {
+      //* Sincronizează commit-urile și generează automat sumariile
+      await syncCommitsForProject(input.projectId, input.githubUrl);
+      
+      //* Declanșează backfill-ul pentru sumariile care lipsesc
+      await backfillCommitSummaries(input.projectId, input.githubUrl);
+
+      return { success: true, message: 'Commit-uri sincronizate și sumarizate' };
+    } catch (error) {
+      console.error('Eroare la sincronizarea commit-urilor:', error);
+      throw new Error('Nu s-au putut sincroniza commit-urile');
+    }
   }),
 
   deleteProject: protectedProcedure.input(z.object({
@@ -88,6 +137,7 @@ export const projectRouter = createTRPCRouter({
     const project = await ctx.db.project.findUnique({
 
       where: { id: input.projectId },
+
     });
 
     if (!project) {

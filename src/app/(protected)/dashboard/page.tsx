@@ -8,9 +8,9 @@ import { ExternalLink, Github } from "lucide-react";
 import CommitLog from "./commit-log";
 
 const DashboardPage: React.FC = () => {
-  const { project, deleteProject } = useProject(); // Hook-ul pentru proiecte
-  const [isDeleting, setIsDeleting] = useState(false); // Indicator pentru procesul de ștergere
-  const router = useRouter(); // Pentru navigare
+  const { project, deleteProject } = useProject();
+  const [isDeleting, setIsDeleting] = useState(false); 
+  const router = useRouter();
 
   const handleDelete = async () => {
     if (!project?.id) {

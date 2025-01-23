@@ -1,13 +1,16 @@
-import dotenv from 'dotenv';
-dotenv.config();
-import { Octokit } from '@octokit/rest';
-import { db } from './database';
+import { Octokit } from "@octokit/rest";
+import dotenv from "dotenv";
+import { db } from "./database";
+import { fetchCommitDiff, aiSummariseCommit } from "./gemini";
 
-export const octokit = new Octokit({
+dotenv.config();
+
+const octokit = new Octokit({
   auth: process.env.GITHUB_TOKEN,
 });
 
 interface Commit {
+  sha: string;
   commit: {
     message: string;
     author: {
@@ -16,53 +19,50 @@ interface Commit {
       date?: string;
     } | null;
   };
-  sha: string;
   author?: {
     avatar_url?: string;
     login?: string;
   } | null;
 }
 
-type Response = {
+interface Response {
   commitMessage: string;
   commitHash: string;
   commitAuthorName: string;
   commitAuthorAvatar: string;
   commitDate: string | Date;
   summary?: string;
-};
+}
 
 async function fetchCommits(owner: string, repo: string): Promise<Commit[]> {
   const commits: Commit[] = [];
   let page = 1;
   let hasNextPage = true;
 
-  while (hasNextPage) {
-    try {
+  try {
+    while (hasNextPage) {
       const { data, headers } = await octokit.rest.repos.listCommits({
         owner,
         repo,
         page,
-        per_page: 15,   
+        per_page: 100,
       });
 
       commits.push(...data);
+      hasNextPage = headers.link?.includes('rel="next"') ?? false;
       page += 1;
-
-      hasNextPage = Boolean(headers['link'] && headers['link'].includes('rel="next"'));
-    } catch (error) {
-      console.error(`Error fetching commits for repo ${owner}/${repo}:`, error);
-      throw error;
     }
-  }
 
-  return commits;
+    return commits;
+  } catch (error) {
+    console.error(`Error fetching commits from GitHub for ${owner}/${repo}:`, error);
+    throw error;
+  }
 }
 
-
 async function saveCommitsToDB(projectId: string, commits: Response[]) {
-  try {
-    for (const commit of commits) {
+  for (const commit of commits) {
+    try {
       const existingCommit = await db.commit.findFirst({
         where: { commitHash: commit.commitHash },
       });
@@ -75,74 +75,96 @@ async function saveCommitsToDB(projectId: string, commits: Response[]) {
             commitAuthorName: commit.commitAuthorName,
             commitAuthorAvatar: commit.commitAuthorAvatar,
             commitDate: commit.commitDate,
-            summary: commit.summary || '',
-            projectId: projectId,
+            summary: commit.summary || "No summary available.",
+            projectId,
           },
         });
-        console.log(`Saved commit: ${commit.commitHash} for project ${projectId}`);
-      } else {
-        console.log(`Commit ${commit.commitHash} already exists for project ${projectId}`);
       }
+    } catch (error) {
+      console.error(`Error saving commit ${commit.commitHash} to DB:`, error);
     }
-  } catch (error) {
-    console.error(`Error saving commits to DB for project ${projectId}:`, error);
-    throw error;
   }
 }
 
-export const syncCommitsForProject = async (projectId: string, githubUrl: string) => {
-  const [owner, repo] = githubUrl.split('/').slice(-2);
+export async function backfillCommitSummaries(projectId: string, githubUrl: string) {
+  const [owner, repo] = githubUrl.split("/").slice(-2);
 
   if (!owner || !repo) {
-    console.error(`Invalid GitHub URL for project ${projectId}: ${githubUrl}`);
-    throw new Error("Invalid GitHub URL format");
+    throw new Error("Invalid GitHub URL format.");
   }
 
-  try {
-    const commits = await fetchCommits(owner, repo);
+  const commitsWithoutSummary = await db.commit.findMany({
+    where: {
+      projectId: projectId,
+      OR: [
+        { summary: "" },
+        { summary: null },
+        { summary: "No changes detected." },
+        { summary: "Summary could not be generated." },
+      ],
+    },
+  });
 
-    if (!commits || commits.length === 0) {
-      console.log(`No commits found for project ${projectId}`);
-      return [];
+  for (const commit of commitsWithoutSummary) {
+    try {
+      const diff = await fetchCommitDiff(owner, repo, commit.commitHash);
+
+      if (diff) {
+        const summary = await aiSummariseCommit(diff);
+
+        await db.commit.update({
+          where: { id: commit.id },
+          data: { summary: summary || "No changes detected." },
+        });
+      }
+    } catch (error) {
+      console.error(`Failed to generate summary for commit ${commit.commitHash}:`, error);
     }
-
-    const formattedCommits = commits.map(commit => ({
-      commitMessage: commit.commit.message,
-      commitHash: commit.sha,
-      commitAuthorName: commit.commit.author?.name || commit.author?.login || 'Unknown',
-      commitAuthorAvatar: commit.author?.avatar_url ?? 'https://default-avatar-url.com',
-      commitDate: commit.commit.author?.date || new Date(),
-    }));
-
-    await saveCommitsToDB(projectId, formattedCommits);
-    return formattedCommits;
-  } catch (error) {
-    console.error(`Error syncing commits for project ${projectId}:`, error);
-    throw error;
   }
-};
+}
 
-export const syncCommitsForAllProjects = async () => {
-  try {
-    const projects = await db.project.findMany({
-      where: {
-        deletedAt: null, 
-      },
-    });
+export async function syncCommitsForProject(projectId: string, githubUrl: string) {
+  const [owner, repo] = githubUrl.split("/").slice(-2);
 
-    for (const project of projects) {
-      if (!project.githubUrl) {
-        console.warn(`Project ${project.id} has no GitHub URL.`);
-        continue;
+  if (!owner || !repo) {
+    throw new Error("Invalid GitHub URL format.");
+  }
+
+  const commits = await fetchCommits(owner, repo);
+
+  const formattedCommits: Response[] = [];
+
+  for (const commit of commits) {
+    try {
+      console.log(`Fetching diff for commit: ${commit.sha}`);
+      const diff = await fetchCommitDiff(owner, repo, commit.sha);
+
+      let summary = "No changes detected.";
+      if (diff) {
+        console.log(`Generating summary for commit: ${commit.sha}`);
+        summary = await aiSummariseCommit(diff) || "No changes detected.";
       }
 
-      console.log(`Syncing commits for project ${project.id}`);
-      await syncCommitsForProject(project.id, project.githubUrl);
+      formattedCommits.push({
+        commitMessage: commit.commit.message,
+        commitHash: commit.sha,
+        commitAuthorName: commit.commit.author?.name || commit.author?.login || "Unknown",
+        commitAuthorAvatar: commit.author?.avatar_url || "https://default-avatar-url.com",
+        commitDate: commit.commit.author?.date || new Date(),
+        summary,
+      });
+    } catch (error) {
+      console.error(`Error processing commit ${commit.sha}:`, error);
+      formattedCommits.push({
+        commitMessage: commit.commit.message,
+        commitHash: commit.sha,
+        commitAuthorName: commit.commit.author?.name || commit.author?.login || "Unknown",
+        commitAuthorAvatar: commit.author?.avatar_url || "https://default-avatar-url.com",
+        commitDate: commit.commit.author?.date || new Date(),
+        summary: "Summary could not be generated.",
+      });
     }
-
-    console.log("Finished syncing commits for all projects.");
-  } catch (error) {
-    console.error("Error syncing commits for all projects:", error);
-    throw error;
   }
-};
+
+  await saveCommitsToDB(projectId, formattedCommits);
+}

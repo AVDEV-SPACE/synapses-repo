@@ -66,9 +66,9 @@
                 </Link>
               </div>
               <span className="font-semibold">{commit.commitMessage}</span>
-              <pre className="mt-2 whitespace-pre-wrap text-sm leading-8 text-gray-500">
-                {commit.summary}
-              </pre>
+                <pre className="mt-2 whitespace-pre-wrap text-sm leading-8 text-gray-500">
+                  {commit.summary || "No summary available."}
+                </pre>
             </div>
           </li>
         ))}
